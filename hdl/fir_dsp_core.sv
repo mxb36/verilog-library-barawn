@@ -8,6 +8,8 @@
 // USE_C = "TRUE" (default)/"FALSE"
 // USE_RND = "TRUE"/"FALSE" (default) -- READ NOTE BELOW
 // RND_VAL = {48{1'b0}} (default)     -- READ NOTE BELOW
+// USE_PATTERN = "TRUE"/"FALSE" (default) - use pattern detect
+// PATTERN = {48{1'b0}} (default) -- pattern to look for
 // USE_ACIN = "TRUE"/"FALSE" (default)
 // USE_ACOUT = "TRUE"/"FALSE" (default)
 // SUBTRACT_A = "FALSE" (default) / "TRUE"
@@ -61,6 +63,10 @@ module fir_dsp_core #(
         parameter USE_C = "TRUE",
 	parameter USE_RND = "FALSE",
 	parameter RND_VAL = {48{1'b0}},
+	parameter USE_PATTERN = "FALSE",
+	parameter PATTERN_VAL = {48{1'b0}},
+	parameter MASK_VAL = {48{1'b1}},
+	parameter USE_CARRYIN = "FALSE",
         parameter USE_ACIN = "FALSE",
         parameter USE_ACOUT = "FALSE",
         parameter SUBTRACT_A = "FALSE",
@@ -68,7 +74,12 @@ module fir_dsp_core #(
 	parameter USE_D = "TRUE",
         parameter PREADD_REG = 0,
         parameter MULT_REG = 0,
+        // NOTE NOTE NOTE: This is the number of registers
+        // IN THE CASCADE path
         parameter ACASCREG = 1,
+        // NOTE NOTE NOTE: This is NOT the DSP's "AREG"!
+        //  - it is the number of registers IN THE
+        // PREADD/MULT/ALU path!
         parameter AREG = 1,
         parameter CREG = 1,
         parameter DREG = 1,
@@ -77,13 +88,16 @@ module fir_dsp_core #(
 	parameter CLKTYPE = "NONE"
     )(
         input clk_i,
+        input rst_i,
         input [29:0] acin_i,
         input [47:0] pcin_i,
         input [25:0] a_i,
         input [25:0] d_i,
         input [17:0] b_i,
         input [47:0] c_i,
+        input carryin_i,
         output [47:0] p_o,
+        output pattern_o,
         output [47:0] pcout_o,
         output [29:0] acout_o,
         // use for loadable coefficient mode only
@@ -93,23 +107,60 @@ module fir_dsp_core #(
         input update_i
     );
     
+    `define RESETS( port )  \
+        .RSTA( port ),      \
+        .RSTB( port ),      \
+        .RSTC( port ),      \
+        .RSTD( port ),      \
+        .RSTP( port )
+
+    // pattern detection
+    localparam USE_PATTERN_DETECT = USE_PATTERN == "TRUE" ? "PATDET" : "NO_PATDET";
+    localparam SEL_PATTERN = "PATTERN";
+    localparam [47:0] PATTERN = PATTERN_VAL;
+    localparam [47:0] MASK = MASK_VAL;
+    
+    // figure out the ACTUAL DSP AREG
+    localparam MAX_AREG = (ACASCREG > AREG) ? ACASCREG : AREG;
+    localparam DSP_AREG = (USE_ACOUT != "FALSE") ? MAX_AREG : AREG;
+        
+    // this is set if we need to jump back a register in
+    // the path
+    // Note that if the user screws up and specifies ACASCREG = 2
+    // even though they're not using it, we need to ignore them.
+    localparam USE_A1_INMODE = (ACASCREG == 2 && AREG == 1 && USE_ACOUT == "TRUE") ? 1'b1 : 1'b0;
+    localparam USE_D_INMODE = (USE_D == "TRUE") ? 1'b1 : 1'b0;
+    localparam SUBTRACT_A_INMODE = (SUBTRACT_A == "TRUE") ? 1'b1 : 1'b0;
+    // INMODE is always either D+A or D-A, or just +/-A.
+    // We use A2 unless USE_A1 is set, which is the same thing
+    // as INMODE[0].
+    
     // INMODE is always either D+A2 or D-A2, or just +/-A2.
     // A2 gets selected when AMULTSEL is just A instead of AD
     // D+A2 = 00100
+    // D+A1 = 00101
     // D-A2 = 01100
+    // D-A1 = 01101
     // A2   = 00000
+    // A1   = 00001
     // -A2  = 01000
-    localparam [4:0] INMODE = { 1'b0,
-				(SUBTRACT_A == "TRUE") ? 1'b1 : 1'b0,
-				(USE_D == "TRUE") ? 1'b1 : 1'b0,
-				2'b00 };
+    // -A1  = 01001
+    localparam [4:0] DSP_INMODE = 
+            { 1'b0,
+              SUBTRACT_A_INMODE,
+              USE_D_INMODE,
+              1'b0,
+              USE_A1_INMODE };
 
     // FIGURING OUT THE W AND Z MUX:
     // First, check the parameters using a generate block.
     generate
        if (USE_C == "TRUE" && USE_RND == "TRUE" && ADD_PCIN == "TRUE") begin : INVALID
 	  $fatal(1, "Only 2 of USE_C/USE_RND/ADD_PCIN can be TRUE - aborting");
-       end       
+       end
+       if (SUBTRACT_C == "TRUE" && USE_CARRYIN == "TRUE") begin : INVALID2
+      $fatal(1, "USE_CARRYIN and SUBTRACT_C cannot both be TRUE - aborting");
+      end       
     endgenerate
    
     // W mux determination: (00, 10, or 11 only)
@@ -151,7 +202,7 @@ module fir_dsp_core #(
     // if we're subtracting, we need to flip C
     wire [47:0] DSP_C = (USE_C == "TRUE") ? ((SUBTRACT_C == "TRUE") ? ~c_i : c_i) : {48{1'b1}} ;        
     // and if we're subtracting C, we need to pass 1 to carryin to handle the two's complement
-    wire CARRYIN = (SUBTRACT_C == "TRUE") ? 1 : 0;
+    wire CARRYIN = (SUBTRACT_C == "TRUE") ? 1 : ((USE_CARRYIN == "TRUE") ? carryin_i : 1'b0 );
     // the reason we need a billion damn options is b/c you CANNOT hook up a cascade input
     // if you don't plan on using it.
     generate
@@ -163,7 +214,7 @@ module fir_dsp_core #(
                            .A_INPUT( "CASCADE" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(2),
                            .BCASCREG(1),
 			   .B_INPUT("CASCADE"),
@@ -179,10 +230,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .ACIN( acin_i ),
                                     .ACOUT( acout_o ),
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),
@@ -200,8 +255,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));		  
                end else begin : APCSCIN // block: ABPCSCIN
 		// A, P have cascade inputs
@@ -210,7 +267,7 @@ module fir_dsp_core #(
                            .A_INPUT( "CASCADE" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(LOADABLE_B == "NONE" ? 0 : 2),
                            .BCASCREG(LOADABLE_B == "NONE" ? 0 : 1),
                            .CARRYINREG(1'b0),
@@ -226,10 +283,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .ACIN( acin_i ),
                                     .ACOUT( acout_o ),
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),
@@ -247,8 +308,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));
 		  end // block: APCSCIN	       
 	    end // block: CSCIN
@@ -259,7 +322,7 @@ module fir_dsp_core #(
                            .A_INPUT( "DIRECT" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(2),
                            .BCASCREG(1),
                            .CARRYINREG(1'b0),
@@ -275,10 +338,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .A(DSP_A),
                                     .ACOUT( acout_o ),
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),
@@ -296,8 +363,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));                
 	       end else begin : PCSCIN // block: BPCSCIN
 		// P has cascade input
@@ -306,7 +375,7 @@ module fir_dsp_core #(
                            .A_INPUT( "DIRECT" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(LOADABLE_B == "NONE" ? 0 : 2),
                            .BCASCREG(LOADABLE_B == "NONE" ? 0 : 1),
                            .CARRYINREG(1'b0),
@@ -322,10 +391,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .A(DSP_A),
                                     .ACOUT( acout_o ),
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),
@@ -343,8 +416,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));                
 	       end // block: PCSCIN	       
 	    end // block: NCSCIN	   
@@ -357,7 +432,7 @@ module fir_dsp_core #(
                            .A_INPUT( "CASCADE" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(2),
                            .BCASCREG(1),
                            .CARRYINREG(1'b0),
@@ -373,10 +448,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .ACIN( acin_i ),
                                     .ACOUT(acout_o),                           
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),                                
@@ -393,8 +472,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));
 		end // block: ABCSCIN
 	        else begin : ACSCIN
@@ -404,7 +485,7 @@ module fir_dsp_core #(
                            .A_INPUT( "CASCADE" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(LOADABLE_B == "NONE" ? 0 : 2),
                            .BCASCREG(LOADABLE_B == "NONE" ? 0 : 1),
                            .CARRYINREG(1'b0),
@@ -420,10 +501,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .ACIN( acin_i ),
                                     .ACOUT(acout_o),                           
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),                                
@@ -440,8 +525,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));
 		end // block: ACSCIN
 	    end // block: CSCIN
@@ -452,7 +539,7 @@ module fir_dsp_core #(
                            .A_INPUT( "DIRECT" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(2),
                            .BCASCREG(1),
                            .CARRYINREG(1'b0),
@@ -468,10 +555,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .A(DSP_A),
                                     .ACOUT(acout_o),
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),                                
@@ -488,8 +579,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));
 		end // block: BCSCIN
 	        else begin : NCSCIN
@@ -499,7 +592,7 @@ module fir_dsp_core #(
                            .A_INPUT( "DIRECT" ),
                            .ADREG( ADREG ),
                            .ALUMODEREG(1'b0),
-                           .AREG(AREG),
+                           .AREG(DSP_AREG),
                            .BREG(LOADABLE_B == "NONE" ? 0 : 2),
                            .BCASCREG(LOADABLE_B == "NONE" ? 0 : 1),
                            .CARRYINREG(1'b0),
@@ -515,10 +608,14 @@ module fir_dsp_core #(
                            .AMULTSEL(AMULTSEL),
                            .BMULTSEL("B"),
 			   .RND(RND_VAL),
+			               .USE_PATTERN_DETECT(USE_PATTERN_DETECT),
+			               .SEL_PATTERN(SEL_PATTERN),
+			               .PATTERN(PATTERN),
+			               .MASK(MASK),
                            .USE_MULT("MULTIPLY"))
                            u_dsp(   .A(DSP_A),
                                     .ACOUT(acout_o),
-                                    .CEA1( (AREG == 2) ? 1'b1 : 1'b0 ),
+                                    .CEA1( (DSP_AREG == 2) ? 1'b1 : 1'b0 ),
                                     .CEA2(1'b1),
                                     .CEAD( (ADREG == 1) ? 1'b1 : 1'b0 ),
                                     .CEM( (MULT_REG == 1) ? 1'b1 : 1'b0 ),                                
@@ -535,8 +632,10 @@ module fir_dsp_core #(
                                     .P(p_o),
                                     .CEP(1'b1),
                                     .PCOUT(pcout_o),
-                                    .INMODE(INMODE),
+                                    .INMODE(DSP_INMODE),
                                     .OPMODE(OPMODE),
+                                    `RESETS( rst_i ),
+                                    .PATTERNDETECT(pattern_o),
                                     .ALUMODE(ALUMODE));
 		end // block: NCSCIN	       
             end // block: NCSCIN	   
