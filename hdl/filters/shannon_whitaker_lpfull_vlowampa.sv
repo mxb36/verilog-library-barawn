@@ -18,10 +18,11 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
     // NOTE: these are in Q3.15 format, so divide by 32768.
     //       In documentation this is described as Q0.15 but expanding to Q3.15 is automatic in definition.
     // z^-15 and z^-17
+    //                b_coeff16 = 32768
     localparam [17:0] b_coeff15 = 10342;
     // z^-11/z^-21 and z^-13/z^-19
-    localparam [17:0] b_coeff11 = 1672; // 13 is -1672*2+128
     localparam [17:0] b_coeff13 = -3216; // 13 is -1672*2+128
+    localparam [17:0] b_coeff11 = 1672; // 13 is -1672*2+128
     // z^-9 and z^-23
     localparam [17:0] b_coeff9 = -949;
     // z^-5/z^-27 and z^-7/z^-25
