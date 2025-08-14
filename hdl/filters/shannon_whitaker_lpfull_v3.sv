@@ -3,8 +3,18 @@
 // This uses more DSPs but zero logic, and with the
 // systolic rearrangement it fully utilizes the cascade
 // paths, which should make it lower power?
-
+//
+// if SATURATE is set, the output data is compressed to
+// 12-bits only. The filter itself has a gain of basically 0
+// but the phase response allows a properly crafted input
+// signal to reach 13 bit range (the sum of the absolute
+// value of the coefficients divided by 32768 is 1.543).
+//
+// The output is still 13 bits, but in that case the top
+// bit can be dropped. SATURATE also adds an additional
+// clock of delay to the output.
 module shannon_whitaker_lpfull_v3 #(parameter INBITS=12,
+				    parameter SATURATE="TRUE",
                                     localparam OUTBITS=INBITS+1,
                                     localparam NSAMPS=8)(
         input   clk_i,
@@ -12,15 +22,27 @@ module shannon_whitaker_lpfull_v3 #(parameter INBITS=12,
         input [NSAMPS-1:0][INBITS-1:0]   dat_i,
         output [NSAMPS-1:0][OUTBITS-1:0] dat_o );
 
-    localparam signed [7:0][17:0] coeffs =
-        {   18'h10342,  // B15
-            -18'h3216,  // B13
-            18'h1672,   // B11
-            -18'h949,   // B9
-            18'h526,    // B7
-            -18'h263,   // B5
-            18'h105,    // B3
-            18'h23 };   // B1
+    localparam signed [17:0] coeffs[7:0] =
+        {   18'd10342,  // B15      7
+            -18'd3216,  // B13      6
+            18'd1672,   // B11      5
+            -18'd949,   // B9       4
+            18'd526,    // B7       3
+            -18'd263,   // B5       2
+            18'd105,    // B3       1
+            -18'd23 };   // B1       0
+    localparam COEFF_UPSHIFT = 3;
+    function [17:0] coeff_shift;
+        input [17:0] coeff_in;
+        input integer shift;
+        integer i;
+        begin
+            for (i=0;i<18;i=i+1) begin
+                if (i < shift) coeff_shift[i] = 0;
+                else coeff_shift[i] = coeff_in[i-shift];
+            end
+        end
+    endfunction
     // the overall structure of the filter in super-sample rate is
     // [ B7, B15, B9,  B1,   (  x1 )
     //   B5, B13, B11, B3,   |  x3 |
@@ -179,32 +201,48 @@ module shannon_whitaker_lpfull_v3 #(parameter INBITS=12,
             wire [47:0] cascade;	 
             fourtap_systolic_preadd #(.USE_ADD("TRUE"),
                                       .ADD_INDEX(0),
-                                      .SCALE_ADD(14))
+                                      .SCALE_ADD(14+COEFF_UPSHIFT))
                 syst0(  .clk_i(clk_i),
                         .rst_i(rst_i),
                         .dat_i(sys0_in),
                         .preadd_i(pre0_in),
                         .add_i(add_in),
-                        .coeff0_i(    526    ),
-                        .coeff1_i(  10342    ),
-                        .coeff2_i(   -949    ),
-                        .coeff3_i(    -23    ),
+                        .coeff0_i( coeff_shift(coeffs[3], COEFF_UPSHIFT)    ), //  526
+                        .coeff1_i( coeff_shift(coeffs[7], COEFF_UPSHIFT)    ), //  10342
+                        .coeff2_i( coeff_shift(coeffs[4], COEFF_UPSHIFT)    ), //  -949
+                        .coeff3_i( coeff_shift(coeffs[0], COEFF_UPSHIFT)    ), //  -23
                         .pc_o(cascade));
-            wire [47:0] data_out;	 
+            wire [47:0] data_out;
+            // the output data can range from -3161 to +3159: we don't care, so we
+            // again cap off at 12 bits. Note that in order to actually saturate you need
+            // to have a maximal amplitude bandlimited pulse so it's pretty unlikely.
+            wire [12:0] last_out;
             fourtap_systolic_preadd #(.CASCADE("TRUE"),
                                       .ROUND("TRUE"),
-                                      .SCALE_OUT(15))
+                                      .SCALE_OUT(15+COEFF_UPSHIFT))
                 syst1(  .clk_i(clk_i),
                         .rst_i(rst_i),
                         .dat_i(sys1_dly),
                         .preadd_i(pre1_dly),
-                        .coeff0_i(   -263    ),
-                        .coeff1_i(  -3216    ),
-                        .coeff2_i(   1672    ),
-                        .coeff3_i(    105    ),
+                        .coeff0_i( coeff_shift(coeffs[2], COEFF_UPSHIFT)    ), //  -263
+                        .coeff1_i( coeff_shift(coeffs[6], COEFF_UPSHIFT)    ), //  -3216
+                        .coeff2_i( coeff_shift(coeffs[5], COEFF_UPSHIFT)    ), //  1672
+                        .coeff3_i( coeff_shift(coeffs[1], COEFF_UPSHIFT)    ), //  105
                         .pc_i(cascade),
-                        .dat_o(dat_o[i]),
+                        .dat_o(last_out),
                         .p_o(data_out));
+	   
+	    // The saturation logic is always present, but if it's not selected,
+	    // it's not used and will be trimmed away.
+            wire saturated = last_out[12] ^ last_out[11];
+            reg [11:0] dat_final = {12{1'b0}};
+            always @(posedge clk_i) begin : SAT
+                if (saturated) begin
+                    dat_final[11] <= last_out[12];
+                    dat_final[10:0] <= {11{~last_out[12]}};
+                end else dat_final <= last_out[11:0];
+            end
+            assign dat_o[i] = (SATURATE == "TRUE") ? {dat_final[11],dat_final} : last_out[12:0];
         end
     endgenerate
    
