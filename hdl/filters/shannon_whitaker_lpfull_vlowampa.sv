@@ -20,13 +20,16 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
     // z^-15 and z^-17
     localparam [17:0] b_coeff15 = 10342;
     // z^-11/z^-21 and z^-13/z^-19
-    localparam [17:0] b_coeff11_13 = 1672; // 13 is -1672*2+128
+    localparam [17:0] b_coeff11 = 1672; // 13 is -1672*2+128
+    localparam [17:0] b_coeff13 = -3216; // 13 is -1672*2+128
     // z^-9 and z^-23
     localparam [17:0] b_coeff9 = -949;
     // z^-5/z^-27 and z^-7/z^-25
-    localparam [17:0] b_coeff5_7 = 263; // 5 is -2*263
+    localparam [17:0] b_coeff7 = 263; // 5 is -2*263
+    localparam [17:0] b_coeff5 = -526; // 5 is -2*263
     // z^-1/z^-31 and z^-3/z^-29
-    localparam [17:0] b_coeff1_3 = -23; // 3 is 128-23
+    localparam [17:0] b_coeff3 = 105; // 3 is 128-23
+    localparam [17:0] b_coeff1 = -23; // 3 is 128-23
 
     // Coefficients are Q3.15 (18 bits)
     // Inputs are Q17.9 (26 bits).
@@ -94,9 +97,11 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
             // However, 3 and 4 are identical except for i11/13.
             if (i<5) begin : STRUCT0
                 // Structure 0 cascades.
-                wire [47:0] i11_13_to_i5_7;
-                wire [47:0] i5_7_to_i1_3;
-                wire [47:0] i1_3_to_i15;
+                wire [47:0] i13_to_i7;
+                wire [47:0] i11_to_i5;
+                wire [47:0] i5_to_i1;
+                wire [47:0] i7_to_i3;
+                wire [47:0] i3_to_i15;
                 wire [47:0] i15_to_i9;
                 wire [29:0] i15_to_i9_acin;
                 
@@ -106,29 +111,41 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                 
                 if (i < 3) begin : STRUCT0A
                     // compute A13/A11 first.
-                    reg [NBITS:0] A13 = {NBITS+1{1'b0}};
-                    reg [NBITS:0] A13_delay;
-                    reg [NBITS:0] A13_delay2;
-                    reg [NBITS:0] A13_delay3;
-                    // generate 2*A13
-                    wire [NBITS+1:0] A13x2 = { A13, 1'b0 };
-                    reg [NBITS:0] A11 = {NBITS+1{1'b0}};
-                    reg [NBITS:0] A11_delay;
-                    reg [NBITS:0] A11_delay2;
-                    reg [NBITS:0] A11_delay3;
+                    reg [NBITS-1:0] A13 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A13_delay;
+                    reg [NBITS-1:0] A13_delay2;
+                    reg [NBITS-1:0] A13_delay3;
+                    reg [NBITS-1:0] A19 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A19_delay;
+                    reg [NBITS-1:0] A19_delay2;
+                    reg [NBITS-1:0] A19_delay3;
+                    reg [NBITS-1:0] A11 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A11_delay;
+                    reg [NBITS-1:0] A11_delay2;
+                    reg [NBITS-1:0] A11_delay3;
+                    reg [NBITS-1:0] A21 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A21_delay;
+                    reg [NBITS-1:0] A21_delay2;
+                    reg [NBITS-1:0] A21_delay3;
                     always @(posedge clk_i) begin : PREADD_11_13
                         // sign extend and add
-                        A13_delay <= { xin[i+3][NBITS-1], xin[i+3] } +
-                               { xin_store[i+5][NBITS-1], xin_store[i+5] };
+                        A13_delay <= xin[i+3];
+                        A19_delay <= xin_store[i+5];
                         A13_delay2 <= A13_delay;
                         A13_delay3 <= A13_delay2;
                         A13 <= A13_delay3;
+                        A19_delay2 <= A19_delay;
+                        A19_delay3 <= A19_delay2;
+                        A19 <= A19_delay3;
                         // sign extend and add
                       A11_delay2 <= A11_delay;
                       A11_delay3 <= A11_delay2;
                       A11 <= A11_delay3;
-                      A11_delay <= { xin_store[i+3][NBITS-1], xin_store[i+3] } +
-                      { xin[i+5][NBITS-1], xin[i+5] };
+                      A21_delay2 <= A21_delay;
+                      A21_delay3 <= A21_delay2;
+                      A21 <= A21_delay3;
+                      A11_delay <= xin[i+5];
+                      A21_delay <= xin_store[i+3];
                     end
                     // AD/C/PREG=1
                     // A/D/MREG=0
@@ -139,70 +156,92 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                     fir_dsp_core #(.AREG(0),.DREG(0),.MULT_REG(0),
                                    .PREADD_REG(1),.CREG(1),.PREG(1),
                                    .ADD_PCIN("FALSE"),
-                                   .USE_C("TRUE"),
+                                   .USE_C("FALSE"),
                                    .SUBTRACT_A("TRUE"))
-                        u_i11_13( .clk_i(clk_i),
-                                  .a_i(`QCONV( A13x2, 14, 0, 17, 9)),
-                                  .d_i(`QCONV( A11, 13, 0, 17, 9 )),
-                                  .b_i( b_coeff11_13 ),
-                                  // We want (A13 * 2^7 * 2^-15) = (A13 * 2^-8)
-                                  .c_i(`QCONV( A13, 5, 8, 24, 24 )),
-                                  .pcout_o( i11_13_to_i5_7 ));
+                        u_i11( .clk_i(clk_i),
+                                  .a_i(`QCONV( A21, 12, 0, 17, 9)),
+                                  .d_i(`QCONV( A11, 12, 0, 17, 9 )),
+                                  .b_i( b_coeff11 ),
+                                  .pcout_o( i11_to_i5 ));
+                    fir_dsp_core #(.AREG(0),.DREG(0),.MULT_REG(0),
+                                   .PREADD_REG(1),.CREG(1),.PREG(1),
+                                   .ADD_PCIN("FALSE"),
+                                   .USE_C("FALSE"),
+                                   .SUBTRACT_A("TRUE"))
+                        u_i13( .clk_i(clk_i),
+                                  .a_i(`QCONV( A13, 12, 0, 17, 9)),
+                                  .d_i(`QCONV( A19, 12, 0, 17, 9 )),
+                                  .b_i( b_coeff13 ),
+                                  .pcout_o( i13_to_i7 ));
                 end else begin : STRUCT0B
                     // A13 computation...
-                    reg [NBITS:0] A13 = {NBITS+1{1'b0}};
-                    reg [NBITS:0] A13_delay = {NBITS+1{1'b0}};
-                    reg [NBITS:0] A13_delay2 = {NBITS+1{1'b0}};
-                    reg [NBITS:0] A13_delay3 = {NBITS+1{1'b0}};
-                    reg [NBITS:0] A13_delay4 = {NBITS+1{1'b0}};
-                    reg [NBITS:0] A13_delay5 = {NBITS+1{1'b0}};
+                    reg [NBITS-1:0] A13 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A13_delay = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A13_delay2 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A13_delay3 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A19 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A19_delay = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A19_delay2 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A19_delay3 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A19_delay4 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A19_delay5 = {NBITS{1'b0}};
                     
-                    reg [NBITS-1:0] a13_del1 = {NBITS{1'b0}};
-                    reg [NBITS-1:0] a13_del2 = {NBITS{1'b0}};
-                    reg [NBITS-1:0] a13_del3 = {NBITS{1'b0}};
-                    // 2A13
-                    wire [NBITS+1:0] A13_x2 = { A13, 1'b0 };
-                    // -2A13 plus x[i-3]
-                    reg [NBITS+2:0] x_minus_A13_x2 = {NBITS+3{1'b0}};
-                    reg [NBITS+2:0] x_minus_del1 = {NBITS+3{1'b0}};
-                    reg [NBITS+2:0] x_minus_del2 = {NBITS+3{1'b0}};
-                    //  and A13_store
-                    reg [NBITS:0] A13_store = {NBITS+1{1'b0}};
+                    reg [NBITS-1:0] A11 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A11_delay;
+                    reg [NBITS-1:0] A11_delay2;
+                    reg [NBITS-1:0] A11_delay3;
+                    reg [NBITS-1:0] A21 = {NBITS{1'b0}};
+                    reg [NBITS-1:0] A21_delay;
+                    reg [NBITS-1:0] A21_delay2;
+                    reg [NBITS-1:0] A21_delay3;
+                    reg [NBITS-1:0] A21_delay4;
+                    reg [NBITS-1:0] A21_delay5;
                     
                     always @(posedge clk_i) begin : PREADD_11_13
-                        A13_delay <= { xin[i+3][NBITS-1], xin[i+3] } +
-                               { xin[i-3][NBITS-1], xin[i-3] };
+                        A13_delay <=xin[i+3];
                         A13_delay2 <= A13_delay;
                         A13_delay3 <= A13_delay2;
-                        A13_delay4 <= A13_delay3;
-                        A13_delay5 <= A13_delay4;
-                        A13 <= A13_delay;
-                        // need to sign extend 3 bits and 1 bits respectively
-                        x_minus_A13_x2 <= { {3{xin[i-3][NBITS-1] }}, xin[i-3] } -
-                                          { A13_x2[NBITS+1], A13_x2};
-                        x_minus_del1 <= x_minus_A13_x2;
-                        x_minus_del2 <= x_minus_del1;
+                        A13 <= A13_delay3;
                         
-                        a13_del1 <= xin_store[i+3];
-                        a13_del2 <= a13_del1;
-                        a13_del3 <= a13_del2;
+                        A19_delay <= xin[i-3];
+                        A19_delay2 <= A19_delay;
+                        A19_delay3 <= A19_delay2;
+                        A19_delay4 <= A19_delay3;
+                        A19_delay5 <= A19_delay4;
+                        A19 <= A19_delay5;
+                        
+                        A11_delay2 <= A11_delay;
+                        A11_delay3 <= A11_delay2;
+                        A11 <= A11_delay3;
+                        A21_delay2 <= A21_delay;
+                        A21_delay3 <= A21_delay2;
+                        A21 <= A21_delay3;
+                        A11_delay <= xin_store[i-3];
+                        A21_delay <= xin_store[i+3];
                     end
                     // AREG=2
                     // M/CREG=1
                     // AD/D/PREG=0
-                    fir_dsp_core #(.AREG(2),
-                                   .MULT_REG(1),.CREG(1),
-                                   .DREG(0),.PREADD_REG(0),.PREG(0),
+                    fir_dsp_core #(.AREG(0),.DREG(0),.MULT_REG(0),
+                                   .PREADD_REG(1),.CREG(1),.PREG(1),
                                    .ADD_PCIN("FALSE"),
-                                   .USE_C("TRUE"),
-                                   .SUBTRACT_A("FALSE"))
-                        u_i11_13( .clk_i(clk_i),
-                                  .a_i(`QCONV( a13_del3, 12, 0, 17, 9)),
-                                  .d_i(`QCONV( x_minus_del2, 15, 0, 17, 9)),
-                                  .b_i( b_coeff11_13 ),
-                                  // We want (A13 * 2^7 * 2^-15) = (A13 * 2^-8)
-                                  .c_i(`QCONV( A13_delay5, 5, 8, 24, 24 )),
-                                  .pcout_o( i11_13_to_i5_7 ));                  
+                                   .USE_C("FALSE"),
+                                   .SUBTRACT_A("TRUE"))
+                        u_i11( .clk_i(clk_i),
+                                  .a_i(`QCONV( A21, 12, 0, 17, 9)),
+                                  .d_i(`QCONV( A11, 12, 0, 17, 9 )),
+                                  .b_i( b_coeff11 ),
+                                  .pcout_o( i11_to_i5 ));
+                    fir_dsp_core #(.AREG(0),.DREG(0),.MULT_REG(0),
+                                   .PREADD_REG(1),.CREG(1),.PREG(1),
+                                   .ADD_PCIN("FALSE"),
+                                   .USE_C("FALSE"),
+                                   .SUBTRACT_A("TRUE"))
+                        u_i13( .clk_i(clk_i),
+                                  .a_i(`QCONV( A13, 12, 0, 17, 9)),
+                                  .d_i(`QCONV( A19, 12, 0, 17, 9 )),
+                                  .b_i( b_coeff13 ),
+                                  .pcout_o( i13_to_i7 ));
                     
                 end                                                       
                 ///////////////////////////////////
@@ -210,34 +249,52 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                 ///////////////////////////////////
                 
                 // merge the short-delay samples. Sign extend first                
-                wire [NBITS+1:0] A_short_in0_x2 = { {xin[i+1][NBITS-1]}, xin[i+1], 1'b0 };
-                wire [NBITS+1:0] A_short_in1 =    { {2{ xin[i+3][NBITS-1]}}, xin[i+3] };
-                reg [NBITS+1:0] A_short = {NBITS+2{1'b0}};
-                // merge the long-delay samples. Sign extend first
-                wire [NBITS+1:0] A_long_in0_x2 = (i == 0) ?
-                    { xin_store[i+7][NBITS-1], xin_store[i+7], 1'b0 } :
-                    { xin[i-1][NBITS-1], xin[i-1], 1'b0 };
-                wire [NBITS+1:0] A_long_in1 = ( i < 3 ) ?                
-                    { {2{ xin_store[i+5][NBITS-1]}}, xin_store[i+5] } :
-                    { {2{ xin[i-3][NBITS-1]}}, xin[i-3] };
-                reg [NBITS+1:0] A_long = {NBITS+2{1'b0}};
-                reg [NBITS+1:0] a_del1 = {NBITS+2{1'b0}};
-                reg [NBITS+1:0] a_del2 = {NBITS+2{1'b0}};
-                reg [NBITS+1:0] a_del3 = {NBITS+2{1'b0}};
-                reg [NBITS+1:0] a_del4 = {NBITS+2{1'b0}};
-                reg [NBITS+1:0] d_del1 = {NBITS+2{1'b0}};
-                reg [NBITS+1:0] d_del2 = {NBITS+2{1'b0}};
-                reg [47:0] pci_del1 = {48{1'b0}};
+//                wire [NBITS-1:0] A_short_in0_x2 = { {xin[i+1][NBITS-1]}, xin[i+1], 1'b0 };
+//                wire [NBITS-1:0] A_short_in1 =    { {2{ xin[i+3][NBITS-1]}}, xin[i+3] };
+//                reg [NBITS-1:0] A_short = {NBITS{1'b0}};
+//                // merge the long-delay samples. Sign extend first
+//                wire [NBITS-1:0] A_long_in0_x2 = (i == 0) ?
+//                    { xin_store[i+7][NBITS-1], xin_store[i+7], 1'b0 } :
+//                    { xin[i-1][NBITS-1], xin[i-1], 1'b0 };
+//                wire [NBITS-1:0] A_long_in1 = ( i < 3 ) ?                
+//                    { {2{ xin_store[i+5][NBITS-1]}}, xin_store[i+5] } :
+//                    { {2{ xin[i-3][NBITS-1]}}, xin[i-3] };
+//                reg [NBITS-1:0] A_long = {NBITS{1'b0}};
+                reg [NBITS-1:0] A05 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A05_del1 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A05_del2 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A07 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A07_del1 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A07_del2 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A25 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A25_del1 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A25_del2 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A25_del3 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A25_del4 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A27 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A27_del1 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A27_del2 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A27_del3 = {NBITS{1'b0}};
+                reg [NBITS-1:0] A27_del4 = {NBITS{1'b0}};
                               
                 always @(posedge clk_i) begin : PREADD_5_7
-                    a_del1 <= A_long;
-                    a_del2 <= a_del1;
-                    a_del3 <= a_del2;
-                    a_del4 <= a_del3;
-                    d_del1 <= A_short;
-                    d_del2 <= d_del1;
-                    A_short <= A_short_in0_x2 - A_short_in1;
-                    A_long <= A_long_in0_x2 - A_long_in1;
+                    
+                    A05 = xin[i+1];
+                    A05_del1 <= A05;
+                    A05_del2 <= A05_del1;
+                    A07 = xin[i+3];
+                    A07_del1 <= A07;
+                    A07_del2 <= A07_del1;
+                    A25 = ( i < 3 ) ? xin_store[i+5] : xin[i-3];
+                    A25_del1 <= A25;
+                    A25_del2 <= A25_del1;
+                    A25_del3 <= A25_del2;
+                    A25_del4 <= A25_del3;
+                    A27 = (i == 0 ) ? xin_store[i+7] : xin[i-1];
+                    A27_del1 <= A27;
+                    A27_del2 <= A27_del1;
+                    A27_del3 <= A27_del2;
+                    A27_del4 <= A27_del3;
                 end
                 
                 // AREG=2
@@ -248,46 +305,67 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                                .ADD_PCIN("TRUE"),
                                .USE_C("FALSE"),
                                .SUBTRACT_A("FALSE"))
-                    u_i5_7( .clk_i(clk_i),
-                           .a_i( `QCONV( a_del4 , 13, 0, 17, 9) ),
-                           .d_i( `QCONV( d_del2, 13, 0, 17, 9) ),
+                    u_i7( .clk_i(clk_i),
+                           .a_i( `QCONV( A25_del4 , 12, 0, 17, 9) ),
+                           .d_i( `QCONV( A07_del2, 12, 0, 17, 9) ),
                            .b_i( b_coeff5_7 ),
-                           .pcin_i( i11_13_to_i5_7 ),
-                           .pcout_o( i5_7_to_i1_3 ));
+                           .pcin_i( i13_to_i7 ),
+                           .pcout_o( i7_to_i3 ));
+                fir_dsp_core #(.AREG(2),.PREADD_REG(1),.PREG(1),
+                               .DREG(0),.MULT_REG(0),
+                               .ADD_PCIN("TRUE"),
+                               .USE_C("FALSE"),
+                               .SUBTRACT_A("FALSE"))
+                    u_i5( .clk_i(clk_i),
+                           .a_i( `QCONV( A27_del4 , 13, 0, 17, 9) ),
+                           .d_i( `QCONV( A05_del2, 13, 0, 17, 9) ),
+                           .b_i( b_coeff5_7 ),
+                           .pcin_i( i11_to_i5 ),
+                           .pcout_o( i5_to_i1 ));
                 
                 ///////////////////////////////////
                 //             TAP 1/3           //
                 ///////////////////////////////////
                 
                 // construct A3
-                reg [NBITS:0] A3 = {NBITS+1{1'b0}};
-                reg [NBITS:0] A3_del1 = {NBITS+1{1'b0}};
-                reg [NBITS:0] A3_del2 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A3 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A3_del1 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A3_del2 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A29 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A29_del1 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A29_del2 = {NBITS+1{1'b0}};
                 // construct A1
-                reg [NBITS:0] A1 = {NBITS+1{1'b0}};
-                reg [NBITS:0] A1_del1 = {NBITS+1{1'b0}};
-                reg [NBITS:0] A1_del2 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A1 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A1_del1 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A1_del2 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A31 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A31_del1 = {NBITS+1{1'b0}};
+                reg [NBITS-1:0] A31_del2 = {NBITS+1{1'b0}};
                 
                 // A1 is made from
                 // 0:   xin_store[i+7] + xin_delay[i+1]
                 // 1-4: xin[i-1] + xin_delay[i+1]
-                wire [NBITS-1:0] A1_in0 = (i == 0) ? xin_store[i+7] : xin[i-1];
-                wire [NBITS-1:0] A1_in1 = xin_delay[i+1];
-                // A3 is made from
-                // 0-2: xin_store[i+5] + xin_delay[i+3]
-                // 4-5: xin[i-3] + xin_delay[i+3]
-                wire [NBITS-1:0] A3_in0 = (i < 3) ? xin_store[i+5] : xin[i-3];
-                wire [NBITS-1:0] A3_in1 = xin_delay[i+3];
+//                wire [NBITS-1:0] A1_in0 = (i == 0) ? xin_store[i+7] : xin[i-1];
+//                wire [NBITS-1:0] A1_in1 = xin_delay[i+1];
+//                // A3 is made from
+//                // 0-2: xin_store[i+5] + xin_delay[i+3]
+//                // 4-5: xin[i-3] + xin_delay[i+3]
+//                wire [NBITS-1:0] A3_in0 = (i < 3) ? xin_store[i+5] : xin[i-3];
+//                wire [NBITS-1:0] A3_in1 = xin_delay[i+3];
                 
                 always @(posedge clk_i) begin : PREADD_1_3
-                    A1 <= { A1_in0[NBITS-1], A1_in0 } +
-                          { A1_in1[NBITS-1], A1_in1 };
-                    A3 <= { A3_in0[NBITS-1], A3_in0 } +
-                          { A3_in1[NBITS-1], A3_in1 };
+                    A1 <= (i == 0) ? xin_store[i+7] : xin[i-1];
+                    A31 <= xin_delay[i+1];
+                    A3 <= (i < 3) ? xin_store[i+5] : xin[i-3];
+                    A29 <= xin_delay[i+3];
                     A1_del1 <= A1;
                     A1_del2 <= A1_del1;
+                    A31_del1 <= A31;
+                    A31_del2 <= A31_del1;
                     A3_del1 <= A3;
                     A3_del2 <= A3_del1;
+                    A29_del1 <= A29;
+                    A29_del2 <= A29_del1;
                 end
                 // M/CREG = 1
                 // A/D/AD/PREG=0
@@ -296,16 +374,25 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                 fir_dsp_core #(.MULT_REG(1),.CREG(1),
                                .AREG(0),.DREG(0),.PREADD_REG(0),.PREG(0),
                                .ADD_PCIN("TRUE"),
-                               .USE_C("TRUE"),
+                               .USE_C("FALSE"),
                                .SUBTRACT_A("FALSE"))
-                    u_i1_3( .clk_i(clk_i),
-                           .a_i(`QCONV(A3_del1, 13, 0, 17, 9) ),
-                           .d_i(`QCONV(A1_del1, 13, 0, 17, 9) ),
-                           .b_i(b_coeff1_3),
-                           // we want (A3 << 7) >> 15 = A3 >> 8
-                           .c_i(`QCONV(A3_del1, 5, 8, 24, 24)),
-                           .pcin_i( i5_7_to_i1_3 ),
-                           .pcout_o( i1_3_to_i15 ));
+                    u_i3( .clk_i(clk_i),
+                           .a_i(`QCONV(A3_del1, 12, 0, 17, 9) ),
+                           .d_i(`QCONV(A29_del1, 12, 0, 17, 9) ),
+                           .b_i(b_coeff3),
+                           .pcin_i( i7_to_i3 ),
+                           .pcout_o( i3_to_i15 ));
+                fir_dsp_core #(.MULT_REG(1),.CREG(1),
+                               .AREG(0),.DREG(0),.PREADD_REG(0),.PREG(0),
+                               .ADD_PCIN("TRUE"),
+                               .USE_C("FALSE"),
+                               .SUBTRACT_A("FALSE"))
+                    u_i1( .clk_i(clk_i),
+                           .a_i(`QCONV(A1_del1, 12, 0, 17, 9) ),
+                           .d_i(`QCONV(A31_del1, 12, 0, 17, 9) ),
+                           .b_i(b_coeff1),
+                           .pcin_i( i5_to_i1 ),
+                           .p_o( i1_to_i15 ));
                 
                 ///////////////////////////////////
                 //             TAP 15/9          //
@@ -344,15 +431,16 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                 // AD/D/M/PREG=1
                 fir_dsp_core #(.USE_ACOUT("TRUE"),
                                .AREG(2),.ACASCREG(2),
-                               .DREG(1),.PREADD_REG(1),.MULT_REG(1),.PREG(1),
+                               .DREG(1),.PREADD_REG(1),.MULT_REG(1),.PREG(1),.CREG(0),
                                .ADD_PCIN("TRUE"),
-                               .USE_C("FALSE"))
+                               .USE_C("TRUE"))
                     u_i15( .clk_i(clk_i),
                            .a_i(`QCONV(a15_del3, 12, 0, 17, 9)),
                            .d_i(`QCONV(d15_del2, 12, 0, 17, 9)),
                            .b_i(b_coeff15),
+                           .c_i(i1_to_i15),
                            .acout_o( i15_to_i9_acin ),
-                           .pcin_i( i1_3_to_i15 ),
+                           .pcin_i( i3_to_i15 ),
                            .pcout_o( i15_to_i9 ));                
                 fir_dsp_core #(.USE_ACIN("TRUE"),
                                .AREG(0),.DREG(1),.CREG(0),.MULT_REG(1),.PREG(1),
@@ -368,179 +456,8 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                           .pcin_i(i15_to_i9 ),
                           .p_o( sample_out[i] ));
                   
-            end else begin : STRUCT1
-                // structure 1
-                wire [47:0] i9_to_i15;
-                wire [29:0] i9_to_i15_acin;
-                wire [47:0] i15_to_i11_13;
-                wire [47:0] i11_13_to_i1_3;
-                wire [47:0] i1_3_to_i5_7;
-                // structure 1 also feeds back A13 to i9 so we declare the C input early.
-                wire [47:0] Cin_i9;                
-                
-                ///////////////////////////////////
-                //             TAP 9/15          //
-                ///////////////////////////////////
-                
-                // Taps 9/15 cascade one input.
-                // For sample 5-6, the i9 inputs are A: xin_store[i+1] and D: xin[i-1]
-                // sample 7 has A: xin[i-7] and D: xin[i-1]
-                // i15 A input is cascade
-                // i15 D input is xin_store[i-1]
-                
-                wire [11:0] Ain_i9 = (i == 7) ? xin[i-7] : xin_store[i+1];
-                
-                // AREG=2
-                // ACASCREG/C/D/M/PREG=1
-                // ADREG=0
-                fir_dsp_core #(.USE_ACOUT("TRUE"),
-                               .AREG(2),.ACASCREG(1),.DREG(1),.MULT_REG(1),.PREG(1),
-                               .PREADD_REG(0),
-                               .USE_C("TRUE"))
-                     u_i9( .clk_i(clk_i),
-                           .a_i(`QCONV(Ain_i9, 12, 0, 17, 9)),
-                           .d_i(`QCONV(xin[i-1], 12, 0, 17, 9)),
-                           .b_i(b_coeff9),
-                           .c_i(Cin_i9),
-                           .acout_o( i9_to_i15_acin ),
-                           .pcout_o( i9_to_i15 ));                
-                // AD/D/M/PREG=1
-                // AREG=0
-                fir_dsp_core #(.USE_ACIN("TRUE"),
-                               .PREADD_REG(1),.DREG(1),.CREG(1),.MULT_REG(1),.PREG(1),
-                               .AREG(0),                               
-                               .ADD_PCIN("TRUE"),
-                               .USE_C("FALSE"))
-                    u_i15(.clk_i(clk_i),
-                          .acin_i( i9_to_i15_acin ),
-                          .d_i(`QCONV(xin_store[i-1], 12, 0, 17, 9)),
-                          .b_i(b_coeff15),
-                          .pcin_i( i9_to_i15 ),
-                          .pcout_o( i15_to_i11_13 ));
-
-                ///////////////////////////////////
-                //             TAP 11/13         //
-                ///////////////////////////////////
-                
-                // compute A13/A11 first.
-                reg [NBITS:0] A13 = {NBITS+1{1'b0}};
-                // generate 2*A13
-                wire [NBITS+1:0] A13x2 = { A13, 1'b0 };
-                reg [NBITS:0] A11 = {NBITS+1{1'b0}};
-            
-                // A13 inputs are xin[i-5] and xin_store[i-3]
-                // A11 inputs are xin_store[i-5] and xin[i-3]
-                always @(posedge clk_i) begin : PREADD_11_13
-                    A13 <= { xin[i-5][NBITS-1], xin[i-5] } +
-                           { xin_store[i-3][NBITS-1], xin_store[i-3] };
-                    A11 <= { xin_store[i-5][NBITS-1], xin_store[i-5] } +
-                           { xin[i-3][NBITS-1], xin[i-3] };
-                end
-                // add A13 back at i9
-                assign Cin_i9 = `QCONV(A13, 5, 8, 24, 24);
-                
-                // A/C/D/AD/MREG=1
-                // PREG=0
-                // Our CREG adds tap 16.
-                fir_dsp_core #(.AREG(1),.CREG(1),.DREG(1),.PREADD_REG(1),.MULT_REG(1),
-                               .PREG(0),
-                               .USE_C("TRUE"),
-                               .ADD_PCIN("TRUE"),
-                               .SUBTRACT_A("TRUE"))
-                    u_i11_13( .clk_i(clk_i),
-                              .a_i(`QCONV(A13x2, 14, 0, 17, 9)),
-                              .d_i(`QCONV(A11, 13, 0, 17, 9)),
-                              .b_i(b_coeff11_13),
-                              // we want (xin_delay << 14 >> 15 = >> 1)
-                              .c_i(`QCONV(xin_delay[i], 11, 1, 24, 24)),
-                              .pcin_i(i15_to_i11_13),
-                              .pcout_o(i11_13_to_i1_3));
-
-                ///////////////////////////////////
-                //             TAP 1/3           //
-                ///////////////////////////////////
-
-                // construct A3
-                reg [NBITS:0] A3 = {NBITS+1{1'b0}};
-                // construct A1
-                reg [NBITS:0] A1 = {NBITS+1{1'b0}};
-
-                // A1 is made of
-                // 5/6 xin[i-1] xin_delay[i+1]
-                // 7   xin_store[i-1] xin_delay[i-7]
-                // A3 is made of
-                // xin_store[i-3] xin_delay[i-5]
-                
-                // These are NBITS length! They're sign extended!
-                wire [NBITS:0] A1_in0 = (i == 7) ?
-                    { xin_store[i-1][NBITS-1], xin_store[i-1] } :
-                    { xin[i-1][NBITS-1], xin[i-1] };
-                wire [NBITS:0] A1_in1 =
-                    { xin_delay[(i+1)%8][NBITS-1], xin_delay[(i+1)%8] };
-
-                always @(posedge clk_i) begin : PREADD_1_3
-                    A1 <= A1_in0 + A1_in1;
-                    A3 <= { xin_store[i-3][NBITS-1], xin_store[i-3] } +
-                          { xin_delay[i-5][NBITS-1], xin_delay[i-5] };                          
-                end
-                // 5-6 have AREG=1, 7 has AREG=0
-                // AD/C/PREG=1
-                // D/MREG=0
-                fir_dsp_core #(.AREG(i==7 ? 0 : 1),
-                               .PREADD_REG(1),.CREG(1),.PREG(1),
-                               .DREG(0),.MULT_REG(0),
-                               .USE_C("TRUE"),
-                               .ADD_PCIN("TRUE"))
-                    u_i1_3( .clk_i(clk_i),
-                            .a_i(`QCONV(A1, 13, 0, 17, 9)),
-                            .d_i(`QCONV(A3, 13, 0, 17, 9)),
-                            .b_i(b_coeff1_3),
-                            // want (A3 << 7 >> 15 = A3 >> 8)
-                            .c_i(`QCONV(A3, 5, 8, 24, 24)),
-                            .pcin_i( i11_13_to_i1_3 ),
-                            .pcout_o( i1_3_to_i5_7 ) );
-
-                ///////////////////////////////////
-                //             TAP 5/7           //
-                ///////////////////////////////////
-                
-                // merge the short-delay samples. Sign extend first                
-                // Short delays are
-                // 5-6: xin_store[i+1], xin[i-5]
-                // 7: xin[i-7], xin[i-5]
-                wire [NBITS+1:0] A_short_in0_x2 = (i == 7) ? 
-                    { {xin[i-7][NBITS-1]}, xin[i-7], 1'b0 } :
-                    { {xin_store[i+1][NBITS-1]}, xin_store[i+1], 1'b0 };                    
-                wire [NBITS+1:0] A_short_in1 =    { {2{ xin[i-5][NBITS-1]}}, xin[i-5] };
-                reg [NBITS+1:0] A_short = {NBITS+2{1'b0}};
-                // merge the long-delay samples. Sign extend first
-                // Long delays are xin_delay[i-1] and xin_delay[i-3]
-                wire [NBITS+1:0] A_long_in0_x2 = 
-              { xin_delay[i-1][NBITS-1], xin_delay[i-1], 1'b0 };
-                wire [NBITS+1:0] A_long_in1 = 
-                    { {2{ xin_delay[i-3][NBITS-1]}}, xin_delay[i-3] };
-                reg [NBITS+1:0] A_long = {NBITS+2{1'b0}};
-
-                always @(posedge clk_i) begin : PREADD_5_7
-                    A_short <= A_short_in0_x2 - A_short_in1;
-                    A_long <= A_long_in0_x2 - A_long_in1;
-                end
-                
-                // AREG=2
-                // D/M/PREG=1
-                // AD_REG=0                
-                fir_dsp_core #(.AREG(2),
-                               .DREG(1),.MULT_REG(1),.PREG(1),
-                               .PREADD_REG(0),
-                               .USE_C("FALSE"),
-                               .ADD_PCIN("TRUE"))
-                    u_i5_7( .clk_i(clk_i),
-                            .a_i(`QCONV(A_short, 14, 0, 17, 9)),
-                            .d_i(`QCONV(A_long, 14, 0, 17, 9)),
-                            .b_i(b_coeff5_7),
-                            .pcin_i( i1_3_to_i5_7 ),
-                            .p_o(sample_out[i]));                                            
-            end
+            end 
+            //unused else begin : STRUCT1 end
             if (i < 5) begin : ADD_DELAY
                 reg [OUTQ_INT+OUTQ_FRAC-1:0] out_delay = {(OUTQ_INT+OUTQ_FRAC){1'b0}};
                 always @(posedge clk_i) begin : ADD_DELAY_LOGIC
@@ -549,9 +466,8 @@ module shannon_whitaker_lpfull_vlowampa #(parameter NBITS=12,
                     out_delay = sample_out[i][ (24-OUTQ_FRAC) +: (OUTQ_INT+OUTQ_FRAC) ];
                 end
                 assign out_o[(OUTQ_INT+OUTQ_FRAC)*(i+4) +: (OUTQ_INT+OUTQ_FRAC)] = out_delay;
-            end else begin : NODELAY
-                assign out_o[(OUTQ_INT+OUTQ_FRAC)*(i+4) +: (OUTQ_INT+OUTQ_FRAC)] = sample_out[i][ (24-OUTQ_FRAC) +: (OUTQ_INT+OUTQ_FRAC)];
-            end            
+            end 
+            // unused else begin : NODELAY            
         end
     endgenerate
     reg [(OUTQ_INT+OUTQ_FRAC)*NSAMPS-1:0] out_o_store;
