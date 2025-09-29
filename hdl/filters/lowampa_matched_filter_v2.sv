@@ -265,7 +265,8 @@ module lowampa_matched_filter_v2 #(parameter NBITS=12,
 				 .b_i(18'b1),
                                  .pcin_i( dN1_to_dN2 ),
                                  .p_o(sample_out[i]));                                            
-            assign out_o[(OUTQ_INT+OUTQ_FRAC)*i +: (OUTQ_INT+OUTQ_FRAC)] = sample_out[NSAMPS-i-1][0 +: (OUTQ_INT)];
+            //divide by 16
+            assign out_o[(OUTQ_INT+OUTQ_FRAC)*i +: (OUTQ_INT+OUTQ_FRAC)] = sample_out[NSAMPS-i-1][4 +: (OUTQ_INT)];
         end
     endgenerate
     
