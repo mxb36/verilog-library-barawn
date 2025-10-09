@@ -265,8 +265,13 @@ module lowampa_matched_filter_v2 #(parameter NBITS=12,
 				 .b_i(18'b1),
                                  .pcin_i( dN1_to_dN2 ),
                                  .p_o(sample_out[i]));                                            
-            //divide by 16
-            assign out_o[(OUTQ_INT+OUTQ_FRAC)*i +: (OUTQ_INT+OUTQ_FRAC)] = sample_out[NSAMPS-i-1][4 +: (OUTQ_INT)];
+            //divide by 16 and saturate
+            wire [OUTQ_INT-1:0] corrected_out;
+            assign corrected_out = (sample_out[NSAMPS-i-1][47]==1)?
+                                   (sample_out[NSAMPS-i-1][46:(4+OUTQ_INT-1)]=={(46-(4+OUTQ_INT)+2){1'b1}}?sample_out[NSAMPS-i-1][4 +: (OUTQ_INT)]:{1'b1,{(OUTQ_INT-1){1'b0}}}):
+                                   (sample_out[NSAMPS-i-1][46:(4+OUTQ_INT-1)]=={(46-(4+OUTQ_INT)+2){1'b0}}?sample_out[NSAMPS-i-1][4 +: (OUTQ_INT)]:{1'b0,{(OUTQ_INT-1){1'b1}}});
+            
+            assign out_o[(OUTQ_INT+OUTQ_FRAC)*i +: (OUTQ_INT+OUTQ_FRAC)] = corrected_out;
         end
     endgenerate
     
